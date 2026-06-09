@@ -1,0 +1,21 @@
+﻿[paths]
+database = "data/worldcup_analysis.sqlite"
+manual_dir = "data/manual"
+raw_dir = "data/raw"
+processed_dir = "data/processed"
+outputs_dir = "outputs"
+odds_crawler_path = "C:/Users/A/Desktop/分析系统/数据抓取/crawl_500_jczq.py"
+odds_csv_path = "C:/Users/A/Desktop/分析系统/数据抓取/jczq_500.csv"
+
+[model]
+market_weight = 0.45
+elo_weight = 0.25
+recent_form_weight = 0.15
+manual_weight = 0.15
+max_goals = 8
+strong_value_edge = 0.07
+lean_value_edge = 0.035
+
+[weather]
+enabled = true
+stale_hours = 6
