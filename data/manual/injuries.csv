@@ -1,3 +1,5 @@
-match_id,team_id,xg_adjustment,note,source_confidence
-500-201-Netherlands-Uzbekistan,netherlands,0,No manual injury hit,0.5
-500-201-Netherlands-Uzbekistan,uzbekistan,0,No manual injury hit,0.5
+match_id,team_name,player_name,position,status,xg_adjustment,note,source_url,source_confidence,updated_at
+500-10-Netherlands-日本,荷兰,,,,0,伤停数据待确认,,0.2,2026-06-09
+500-10-Netherlands-日本,日本,,,,0,伤停数据待确认,,0.2,2026-06-09
+500-24-Uzbekistan-哥伦比亚,乌兹别克,,,,0,伤停数据待确认,,0.2,2026-06-09
+500-24-Uzbekistan-哥伦比亚,哥伦比亚,,,,0,伤停数据待确认,,0.2,2026-06-09

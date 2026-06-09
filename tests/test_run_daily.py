@@ -57,6 +57,34 @@ def test_run_daily_creates_predictions_and_reports(tmp_path):
     assert report.loc[0, "label"] in KNOWN_LABELS
 
 
+def test_run_daily_merges_manual_schedule_into_matches(tmp_path):
+    schedule_csv = tmp_path / "schedule.csv"
+    schedule_csv.write_text(
+        "match_number,match_id,date,kickoff_time,round_name,group_name,venue_id,home_team,away_team\n"
+        "201,,2026-06-11,2026-06-11 22:00,小组赛,A组,azteca,荷兰,乌兹别克\n",
+        encoding="utf-8",
+    )
+
+    output = run_daily(
+        odds_csv=Path("tests/fixtures/jczq_500_sample.csv"),
+        alias_csv=Path("data/manual/team_aliases.csv"),
+        database=tmp_path / "analysis.sqlite",
+        outputs_dir=tmp_path / "outputs",
+        date_label="2026-06-11",
+        schedule_csv=schedule_csv,
+    )
+
+    with sqlite3.connect(output.database) as conn:
+        match_row = conn.execute(
+            """
+            select kickoff_time, group_name, venue_id, home_team, away_team
+            from matches
+            """
+        ).fetchone()
+
+    assert match_row == ("2026-06-11 22:00", "A组", "azteca", "荷兰", "乌兹别克")
+
+
 def test_run_daily_handles_missing_live_odds_with_empty_reports(tmp_path):
     raw = pd.read_csv(
         Path("tests/fixtures/jczq_500_sample.csv"),

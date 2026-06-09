@@ -145,12 +145,40 @@ def test_load_recommendations_returns_only_latest_model_run(tmp_path, monkeypatc
                 match_id,
                 match_number,
                 competition,
+                group_name,
+                kickoff_time,
+                venue_id,
                 home_team,
                 away_team
             )
-            values (?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            ("latest-match", "1", "friendly", "Netherlands", "Uzbekistan"),
+            (
+                "latest-match",
+                "1",
+                "friendly",
+                "A组",
+                "2026-06-11 22:00",
+                "azteca",
+                "荷兰",
+                "乌兹别克",
+            ),
+        )
+        conn.execute(
+            """
+            insert into weather_snapshots (
+                match_id,
+                fetched_at,
+                temperature_c,
+                humidity_pct,
+                wind_kph,
+                precipitation_probability,
+                weather_code,
+                source_confidence
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("latest-match", "2026-06-09T10:00:00Z", 24.0, 55.0, 12.0, 0.1, 1, 1.0),
         )
         conn.commit()
 
@@ -158,4 +186,8 @@ def test_load_recommendations_returns_only_latest_model_run(tmp_path, monkeypatc
 
     assert result["run_id"].tolist() == ["latest-run"]
     assert result["match_id"].tolist() == ["latest-match"]
-    assert result["match_name"].tolist() == ["Netherlands vs Uzbekistan"]
+    assert result["match_name"].tolist() == ["荷兰 vs 乌兹别克"]
+    assert result["kickoff_time"].tolist() == ["2026-06-11 22:00"]
+    assert result["group_name"].tolist() == ["A组"]
+    assert result["venue_id"].tolist() == ["azteca"]
+    assert result["weather_status"].tolist() == ["已获取"]

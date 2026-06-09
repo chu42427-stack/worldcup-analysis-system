@@ -38,7 +38,9 @@ MATCH_COLUMNS = [
     "match_id",
     "match_number",
     "competition",
+    "group_name",
     "kickoff_time",
+    "venue_id",
     "home_team",
     "away_team",
     "status",
@@ -152,7 +154,31 @@ def _score_row(row: pd.Series, run_id: str, date_label: str) -> tuple[dict, dict
     return prediction, rec
 
 
-def _matches_frame(normalized: pd.DataFrame) -> pd.DataFrame:
+SCHEDULE_COLUMNS = [
+    "match_number",
+    "match_id",
+    "date",
+    "kickoff_time",
+    "round_name",
+    "group_name",
+    "venue_id",
+    "home_team",
+    "away_team",
+]
+
+
+def _load_schedule(path: Path | None) -> pd.DataFrame:
+    if path is None or not path.exists():
+        return pd.DataFrame(columns=SCHEDULE_COLUMNS)
+    schedule = pd.read_csv(path, encoding="utf-8-sig", dtype=str).fillna("")
+    for column in SCHEDULE_COLUMNS:
+        if column not in schedule:
+            schedule[column] = ""
+    schedule["match_number"] = schedule["match_number"].astype(str)
+    return schedule[SCHEDULE_COLUMNS]
+
+
+def _matches_frame(normalized: pd.DataFrame, schedule: pd.DataFrame | None = None) -> pd.DataFrame:
     if normalized.empty:
         return pd.DataFrame(columns=MATCH_COLUMNS)
     frame = normalized[
@@ -161,6 +187,62 @@ def _matches_frame(normalized: pd.DataFrame) -> pd.DataFrame:
             "match_number",
             "competition",
             "kickoff_time",
+            "home_team_raw",
+            "away_team_raw",
+        ]
+    ].copy()
+    frame["match_number"] = frame["match_number"].astype(str)
+    if schedule is not None and not schedule.empty:
+        schedule_fields = schedule[
+            [
+                "match_number",
+                "date",
+                "kickoff_time",
+                "round_name",
+                "group_name",
+                "venue_id",
+                "home_team",
+                "away_team",
+            ]
+        ].rename(
+            columns={
+                "kickoff_time": "schedule_kickoff_time",
+                "home_team": "schedule_home_team",
+                "away_team": "schedule_away_team",
+            }
+        )
+        frame = frame.merge(schedule_fields, on="match_number", how="left")
+    else:
+        frame["date"] = ""
+        frame["schedule_kickoff_time"] = ""
+        frame["round_name"] = ""
+        frame["group_name"] = ""
+        frame["venue_id"] = ""
+        frame["schedule_home_team"] = ""
+        frame["schedule_away_team"] = ""
+
+    frame["kickoff_time"] = frame["schedule_kickoff_time"].where(
+        frame["schedule_kickoff_time"].fillna("") != "",
+        frame["kickoff_time"],
+    )
+    frame["home_team_raw"] = frame["schedule_home_team"].where(
+        frame["schedule_home_team"].fillna("") != "",
+        frame["home_team_raw"],
+    )
+    frame["away_team_raw"] = frame["schedule_away_team"].where(
+        frame["schedule_away_team"].fillna("") != "",
+        frame["away_team_raw"],
+    )
+    frame["group_name"] = frame["group_name"].fillna("")
+    frame["venue_id"] = frame["venue_id"].fillna("")
+    frame = frame[
+        [
+            "match_id",
+            "match_number",
+            "competition",
+            "group_name",
+            "kickoff_time",
+            "venue_id",
             "home_team_raw",
             "away_team_raw",
         ]
@@ -184,7 +266,9 @@ def _write_matches(conn, matches: pd.DataFrame) -> None:
             match_id,
             match_number,
             competition,
+            group_name,
             kickoff_time,
+            venue_id,
             home_team,
             away_team,
             status
@@ -193,7 +277,9 @@ def _write_matches(conn, matches: pd.DataFrame) -> None:
             :match_id,
             :match_number,
             :competition,
+            :group_name,
             :kickoff_time,
+            :venue_id,
             :home_team,
             :away_team,
             :status
@@ -209,11 +295,13 @@ def run_daily(
     database: Path,
     outputs_dir: Path,
     date_label: str,
+    schedule_csv: Path | None = None,
 ) -> DailyRunOutput:
     matcher = TeamMatcher.from_csv(alias_csv)
     raw = import_odds_csv(odds_csv)
     normalized = normalize_odds_frame(raw, matcher)
-    matches_frame = _matches_frame(normalized)
+    schedule = _load_schedule(schedule_csv)
+    matches_frame = _matches_frame(normalized, schedule)
     run_id = uuid.uuid4().hex
     run_time = datetime.now(timezone.utc).isoformat()
     outputs_dir.mkdir(parents=True, exist_ok=True)
@@ -269,12 +357,14 @@ def main() -> None:
     parser.add_argument("--config", default="config.toml")
     args = parser.parse_args()
     cfg = load_config(args.config)
+    schedule_csv = Path(cfg.paths.manual_dir) / "schedule.csv"
     output = run_daily(
         odds_csv=Path(cfg.paths.odds_csv_path),
         alias_csv=Path(cfg.paths.manual_dir) / "team_aliases.csv",
         database=Path(cfg.paths.database),
         outputs_dir=Path(cfg.paths.outputs_dir),
         date_label=args.date,
+        schedule_csv=schedule_csv if schedule_csv.exists() else None,
     )
     print(f"done: {output.match_count} matches -> {output.csv_report}")
 
