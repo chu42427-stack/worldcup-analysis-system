@@ -16,6 +16,7 @@ from app.models.elo import elo_to_goal_delta
 from app.models.market import implied_probabilities, market_edge, remove_margin
 from app.models.poisson import poisson_market
 from app.models.xg import build_expected_goals
+from app.pipelines.fetch_weather import fetch_open_meteo, parse_open_meteo_response
 from app.pipelines.import_odds_500 import import_odds_csv, normalize_odds_frame
 from app.services.data_quality import data_quality_score
 from app.services.recommendations import classify_recommendation
@@ -74,6 +75,17 @@ RECOMMENDATION_COLUMNS = [
     "note",
 ]
 
+WEATHER_COLUMNS = [
+    "match_id",
+    "fetched_at",
+    "temperature_c",
+    "humidity_pct",
+    "wind_kph",
+    "precipitation_probability",
+    "weather_code",
+    "source_confidence",
+]
+
 
 @dataclass(frozen=True)
 class DailyRunOutput:
@@ -92,7 +104,12 @@ def _score_or_default(value: Any, default: float = 75) -> float:
     return float(default) if score is None else float(score)
 
 
-def _score_row(row: pd.Series, run_id: str, date_label: str) -> tuple[dict, dict]:
+def _score_row(
+    row: pd.Series,
+    run_id: str,
+    date_label: str,
+    weather_available: bool = False,
+) -> tuple[dict, dict]:
     market = remove_margin(
         implied_probabilities(
             row["live_home_odds"], row["live_draw_odds"], row["live_away_odds"]
@@ -115,7 +132,7 @@ def _score_row(row: pd.Series, run_id: str, date_label: str) -> tuple[dict, dict
     poisson = poisson_market(xg.home_xg, xg.away_xg)
     flags = {
         "odds": True,
-        "weather": False,
+        "weather": weather_available,
         "injuries": pd.notna(row.get("home_injury_xg_adjustment")),
     }
     quality, warnings = data_quality_score(flags)
@@ -289,6 +306,46 @@ def _write_matches(conn, matches: pd.DataFrame) -> None:
     )
 
 
+def _load_venues(path: Path | None) -> pd.DataFrame:
+    if path is None or not path.exists():
+        return pd.DataFrame(columns=["venue_id", "latitude", "longitude"])
+    venues = pd.read_csv(path, encoding="utf-8-sig")
+    for column in ["venue_id", "latitude", "longitude"]:
+        if column not in venues:
+            venues[column] = None
+    return venues[["venue_id", "latitude", "longitude"]]
+
+
+def _weather_frame(
+    matches: pd.DataFrame,
+    venues_csv: Path | None,
+    enabled: bool,
+    weather_fetcher=fetch_open_meteo,
+) -> pd.DataFrame:
+    if not enabled or matches.empty:
+        return pd.DataFrame(columns=WEATHER_COLUMNS)
+    venues = _load_venues(venues_csv)
+    if venues.empty:
+        return pd.DataFrame(columns=WEATHER_COLUMNS)
+    candidates = matches.merge(venues, on="venue_id", how="left")
+    payloads_by_venue: dict[str, dict[str, Any]] = {}
+    snapshots = []
+    for _, row in candidates.iterrows():
+        if pd.isna(row.get("latitude")) or pd.isna(row.get("longitude")):
+            continue
+        venue_id = str(row.get("venue_id") or "")
+        try:
+            if venue_id not in payloads_by_venue:
+                payloads_by_venue[venue_id] = weather_fetcher(
+                    float(row["latitude"]), float(row["longitude"])
+                )
+            payload = payloads_by_venue[venue_id]
+        except Exception:
+            continue
+        snapshots.append(parse_open_meteo_response(row["match_id"], payload))
+    return pd.DataFrame(snapshots, columns=WEATHER_COLUMNS)
+
+
 def run_daily(
     odds_csv: Path,
     alias_csv: Path,
@@ -296,18 +353,29 @@ def run_daily(
     outputs_dir: Path,
     date_label: str,
     schedule_csv: Path | None = None,
+    venues_csv: Path | None = None,
+    fetch_weather_enabled: bool = False,
+    weather_fetcher=fetch_open_meteo,
 ) -> DailyRunOutput:
     matcher = TeamMatcher.from_csv(alias_csv)
     raw = import_odds_csv(odds_csv)
     normalized = normalize_odds_frame(raw, matcher)
     schedule = _load_schedule(schedule_csv)
     matches_frame = _matches_frame(normalized, schedule)
+    weather_frame = _weather_frame(
+        matches_frame, venues_csv, fetch_weather_enabled, weather_fetcher
+    )
     run_id = uuid.uuid4().hex
     run_time = datetime.now(timezone.utc).isoformat()
     outputs_dir.mkdir(parents=True, exist_ok=True)
 
     predictions = []
     recommendations = []
+    weather_available_matches = set()
+    if not weather_frame.empty:
+        weather_available_matches = set(
+            weather_frame[weather_frame["source_confidence"] > 0]["match_id"].tolist()
+        )
     for _, row in normalized.iterrows():
         if (
             pd.isna(row.get("live_home_odds"))
@@ -315,7 +383,12 @@ def run_daily(
             or pd.isna(row.get("live_away_odds"))
         ):
             continue
-        prediction, recommendation = _score_row(row, run_id, date_label)
+        prediction, recommendation = _score_row(
+            row,
+            run_id,
+            date_label,
+            weather_available=row["match_id"] in weather_available_matches,
+        )
         predictions.append(prediction)
         recommendations.append(recommendation)
 
@@ -345,6 +418,7 @@ def run_daily(
         )
         write_dataframe(conn, "match_predictions", predictions_frame)
         _write_matches(conn, matches_frame)
+        write_dataframe(conn, "weather_snapshots", weather_frame)
         # DB recommendations stay normalized; reports keep dashboard display fields.
         write_dataframe(conn, "recommendations", report[RECOMMENDATION_COLUMNS])
 
@@ -358,6 +432,7 @@ def main() -> None:
     args = parser.parse_args()
     cfg = load_config(args.config)
     schedule_csv = Path(cfg.paths.manual_dir) / "schedule.csv"
+    venues_csv = Path(cfg.paths.manual_dir) / "venues.csv"
     output = run_daily(
         odds_csv=Path(cfg.paths.odds_csv_path),
         alias_csv=Path(cfg.paths.manual_dir) / "team_aliases.csv",
@@ -365,6 +440,8 @@ def main() -> None:
         outputs_dir=Path(cfg.paths.outputs_dir),
         date_label=args.date,
         schedule_csv=schedule_csv if schedule_csv.exists() else None,
+        venues_csv=venues_csv if venues_csv.exists() else None,
+        fetch_weather_enabled=cfg.weather.enabled,
     )
     print(f"done: {output.match_count} matches -> {output.csv_report}")
 

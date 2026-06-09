@@ -85,6 +85,66 @@ def test_run_daily_merges_manual_schedule_into_matches(tmp_path):
     assert match_row == ("2026-06-11 22:00", "A组", "azteca", "荷兰", "乌兹别克")
 
 
+def test_run_daily_writes_weather_snapshots_when_enabled(tmp_path):
+    schedule_csv = tmp_path / "schedule.csv"
+    schedule_csv.write_text(
+        "match_number,match_id,date,kickoff_time,round_name,group_name,venue_id,home_team,away_team\n"
+        "201,,2026-06-11,2026-06-11 22:00,小组赛,A组,azteca,荷兰,乌兹别克\n",
+        encoding="utf-8",
+    )
+    venues_csv = tmp_path / "venues.csv"
+    venues_csv.write_text(
+        "venue_id,venue_name,city,country,latitude,longitude,indoor_flag,timezone\n"
+        "azteca,Estadio Azteca,Mexico City,Mexico,19.3029,-99.1505,0,America/Mexico_City\n",
+        encoding="utf-8",
+    )
+
+    def fake_weather_fetcher(latitude, longitude):
+        assert latitude == 19.3029
+        assert longitude == -99.1505
+        return {
+            "current": {
+                "temperature_2m": 24.0,
+                "relative_humidity_2m": 55.0,
+                "wind_speed_10m": 12.0,
+                "precipitation": 0.1,
+                "weather_code": 1,
+            }
+        }
+
+    output = run_daily(
+        odds_csv=Path("tests/fixtures/jczq_500_sample.csv"),
+        alias_csv=Path("data/manual/team_aliases.csv"),
+        database=tmp_path / "analysis.sqlite",
+        outputs_dir=tmp_path / "outputs",
+        date_label="2026-06-11",
+        schedule_csv=schedule_csv,
+        venues_csv=venues_csv,
+        fetch_weather_enabled=True,
+        weather_fetcher=fake_weather_fetcher,
+    )
+
+    with sqlite3.connect(output.database) as conn:
+        weather_row = conn.execute(
+            """
+            select match_id, temperature_c, humidity_pct, wind_kph, precipitation_probability
+            from weather_snapshots
+            """
+        ).fetchone()
+        risk_tags = json.loads(
+            conn.execute("select risk_tags_json from recommendations").fetchone()[0]
+        )
+
+    assert weather_row == (
+        "500-201-Netherlands-Uzbekistan",
+        24.0,
+        55.0,
+        12.0,
+        0.1,
+    )
+    assert "weather_missing" not in risk_tags
+
+
 def test_run_daily_handles_missing_live_odds_with_empty_reports(tmp_path):
     raw = pd.read_csv(
         Path("tests/fixtures/jczq_500_sample.csv"),

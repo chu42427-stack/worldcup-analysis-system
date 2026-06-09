@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from app.config import load_config
 from app.db import connect, initialize_database, read_dataframe
 from app.services.display import format_match_label, load_team_display
+from app.services.injuries import injury_status_for_match, load_injury_records
 
 LABEL_TRANSLATIONS = {
     "Strong value": "强价值",
@@ -87,10 +88,6 @@ def _parse_risk_tags(value: str) -> list[str]:
     except (TypeError, json.JSONDecodeError):
         return []
     return tags if isinstance(tags, list) else []
-
-
-def _injury_status(tags: list[str]) -> str:
-    return "待确认" if "injuries_missing" in tags else "已维护"
 
 
 def _data_status(row: pd.Series) -> str:
@@ -225,6 +222,7 @@ def main():
 
     cfg = load_config(PROJECT_ROOT / "config.toml")
     team_display = load_team_display(PROJECT_ROOT / "data" / "manual" / "team_display.csv")
+    injury_records = load_injury_records(PROJECT_ROOT / "data" / "manual" / "injuries.csv")
     st.markdown(
         """
         <div class="wc-hero">
@@ -249,7 +247,9 @@ def main():
         note_display=data["note"].map(_translate_note),
     )
     data["risk_tags"] = data["risk_tags_json"].map(_parse_risk_tags)
-    data["injury_status"] = data["risk_tags"].map(_injury_status)
+    data["injury_status"] = data["match_id"].map(
+        lambda match_id: injury_status_for_match(match_id, injury_records)
+    )
     data["match_display"] = data.apply(
         lambda row: format_match_label(row.home_team, row.away_team, team_display)
         if pd.notna(row.home_team) and pd.notna(row.away_team)

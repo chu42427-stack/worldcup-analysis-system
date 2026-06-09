@@ -22,7 +22,7 @@ def fetch_open_meteo(latitude: float, longitude: float) -> dict[str, Any]:
         "longitude": longitude,
         "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation,weather_code",
     }
-    response = requests.get(OPEN_METEO_URL, params=params, timeout=20)
+    response = requests.get(OPEN_METEO_URL, params=params, timeout=8)
     response.raise_for_status()
     return response.json()
 
